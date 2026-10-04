@@ -18,7 +18,7 @@
 // 抛 { status, ...body } 表示 HTTP 错误。
 
 const { getDb } = require('./db');
-const { redactedSourceSet, REDACTED_SOURCE } = require('./redact');
+const { redactedSourceSet, isRedactedSource, REDACTED_SOURCE } = require('./redact');
 
 const MAX_NOTE_LEN = 2000; // 与考异备注长度上限一致
 const MAX_SOURCE_LEN = 1000; // 与出处录入长度上限一致
@@ -272,11 +272,12 @@ function effectiveErrataForVersion(versionNo, versionDetail) {
 }
 
 // 公开读出层：附记出处命中遮盖登记的统一显示「出处已遮盖」，其余字段不动。
+// 命中规则与版本快照一致：首尾空白等同，其余逐字精确（见 redact.js）。
 function applyRedactionToErrata(items, redactedSet = redactedSourceSet()) {
   if (!items || redactedSet.size === 0) return items;
   return items.map((it) => ({
     ...it,
-    source: redactedSet.has(it.source) ? REDACTED_SOURCE : it.source,
+    source: isRedactedSource(it.source, redactedSet) ? REDACTED_SOURCE : it.source,
   }));
 }
 

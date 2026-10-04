@@ -3,7 +3,9 @@
 #
 # 流程：建草稿 → 发布两个版本 → 只读预览命中 → 携最新版本号确认遮盖
 #       → 核对访客视图（「出处已遮盖」）与编辑口令原文视图
-#       → 空文本 400、预览后新版本 409、重复确认幂等。
+#       → 空文本 400、预览后新版本 409、重复确认幂等
+#       → 本轮匹配规则：库存出处带首尾空白也命中（首尾空白等同），
+#         内部空白仍须逐字精确（步骤 13–16）。
 #
 # 依赖：curl 与 node（本应用本身就需要 node，用于解析 JSON）。
 # 用法：
@@ -123,6 +125,49 @@ say "12) 已登记遮盖清单（编辑者视角，含原文）"
 get_ed "$BASE/api/editor/redactions" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));
 for (const r of d.redactions.filter(x=>x.source.includes("'"$TS"'")))
   console.log(`  [${r.id}] ${r.source}  登记于 ${r.redactedAt} UTC  by ${r.editor||"匿名"}`);'
+
+say "13) 本轮匹配规则：库存出处带首尾空白（手工录入 / 整理包 / 会话残留）也能命中"
+# 模拟录入时残留的出处：前导空格 + 尾部换行；关系出处带尾部空格
+SRC3="示例受访人 丙 口述 ${TS}"
+E4=$(post "$BASE/api/editor/events" -d '{"title":"示例新发现事件 '$TS'"}' | jfield 'd.event.id')
+C4=$(post "$BASE/api/editor/events/$E4/claims" \
+  -d '{"precision":"year","year":1963,"source":"  '"$SRC3"'\n"}' | jfield 'd.claim.id')
+post "$BASE/api/editor/relations" \
+  -d '{"earlierId":'"$E3"',"laterId":'"$E4"',"source":"'"$SRC3"'  "}' >/dev/null
+post "$BASE/api/editor/publish" \
+  -d '{"selection":[{"eventId":'"$E1"',"claimId":'"$C1"'},{"eventId":'"$E2"',"claimId":'"$C2"'},{"eventId":'"$E3"',"claimId":'"$C3"'},{"eventId":'"$E4"',"claimId":'"$C4"'}],"baseVersionNo":'"$(latest_no)"',"note":"含带空白出处的新版","editor":"示例脚本"}' \
+  | jfield '"versionNo=" + d.versionNo'
+
+say "14) 按不带空白的原文预览：命中带空白的库存出处；随后确认（提交首尾空白变体）"
+PREVIEW3=$(post "$BASE/api/editor/redaction-preview" -d '{"source":"'"$SRC3"'"}')
+echo "$PREVIEW3" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));
+console.log("事件主张命中 =", d.totalEventHitCount, " 先于关系命中 =", d.totalRelationHitCount,
+  " 草稿参考 =", d.draft.claimHitCount, "+", d.draft.relationHitCount);
+if (d.totalEventHitCount < 1 || d.totalRelationHitCount < 1) { console.error("FAIL：带首尾空白的库存出处未命中"); process.exit(1); }'
+LATEST3=$(echo "$PREVIEW3" | jfield 'd.currentVersionNo')
+post "$BASE/api/editor/redaction" \
+  -d '{"source":" \t'"$SRC3"' ","currentVersionNo":'"$LATEST3"',"editor":"示例脚本"}' \
+  | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));
+console.log("alreadyRedacted =", d.alreadyRedacted, " 当前命中 =", d.totalHitCount);
+if (d.alreadyRedacted !== false) { console.error("FAIL：首次确认应 alreadyRedacted=false"); process.exit(1); }'
+
+say "15) 访客视图：带空白出处已遮盖；编辑者原文视图仍保留带空白原文"
+curl -s "$BASE/api/public/chronicle" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));
+const ev = d.version.events.find(e=>e.title.includes("新发现事件"));
+const rel = d.version.relations.find(r=>r.laterEventId===ev.eventId);
+console.log("访客看到的事件出处 =", ev.source, " 关系出处 =", rel.source);
+if (ev.source !== "出处已遮盖" || rel.source !== "出处已遮盖") { console.error("FAIL：访客视图未遮盖"); process.exit(1); }'
+get_ed "$BASE/api/editor/versions/$(latest_no)/raw" | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));
+const ev = d.version.events.find(e=>e.title.includes("新发现事件"));
+console.log("编辑者看到的原文 =", JSON.stringify(ev.source));
+if (ev.source.trim() !== "'"$SRC3"'") { console.error("FAIL：原文视图被改写"); process.exit(1); }'
+
+say "16) 内部空白仍须逐字精确：去掉内部空格的查询不命中、不遮盖"
+post "$BASE/api/editor/redaction-preview" \
+  -d '{"source":"示例受访人丙口述 '"$TS"'"}' \
+  | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));
+console.log("去掉内部空格后的命中数 =", d.totalHitCount);
+if (d.totalHitCount !== 0) { console.error("FAIL：内部空白不同不应命中"); process.exit(1); }'
 
 say "全部断言通过 ✅"
 echo "提示：可打开 $BASE/ 查看访客年表（出处显示「出处已遮盖」），$BASE/editor 查看版本原文。"

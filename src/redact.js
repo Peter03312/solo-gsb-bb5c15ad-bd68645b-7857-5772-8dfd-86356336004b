@@ -6,12 +6,22 @@
 // （versions / version_events / version_relations）或草稿（events / claims /
 // relations）**。遮盖在读出层动态生效：
 //
-//   - 公开访客接口（最新年表、历史版本、版本清单以外的快照详情）读出时，
-//     凡事件主张 source、「先于」关系 source 与任一已登记文本**精确相等**，
+//   - 公开访客接口（最新年表、历史版本、专题路线、勘误附记出处）读出时，
+//     凡事件主张 source、「先于」关系 source 命中任一已登记文本，
 //     一律显示为统一的 REDACTED_SOURCE（「出处已遮盖」），其余字段与版本号不变；
 //   - 以后发布含同一文本的新版本，因读出时动态比对，自动遮盖，无需额外处理；
 //   - 持编辑口令的接口（草稿状态、恢复预览、版本原文、发布返回）始终返回原文；
 //   - 从历史版本恢复草稿复制的是快照原文，草稿区不受遮盖影响。
+//
+// 命中规则（本轮明确）：**首尾空白等同，其余逐字精确**。
+//   手工录入、整理包导入、并行会话保存的出处都可能带首尾空白（录入端保留原文），
+//   因此命中比较时先把**库存文本**与**登记文本**各自去除首尾空白再比较：
+//     - 「 李宝山口述 」（库存）与「李宝山口述」（登记）⇒ 命中；
+//     - 内部空白与其余文字仍须逐字相同：「李宝山 口述」≠「李宝山口述」，部分包含也不命中。
+//   该规则统一适用于：预览命中统计（已发布事件主张 / 先于关系 / 草稿提示）、
+//   遮盖登记去重，以及全部公开读出层（最新年表、历史版本、专题路线、勘误附记、
+//   以后发布的新版本）。比较在 JS 侧用 String#trim 完成，与录入校验的空白口径一致
+//   （SQLite 的 TRIM 只去空格，不覆盖换行 / 制表符等，故不在 SQL 里比较）。
 //
 // 两阶段与恢复草稿 / 导入整包一致：
 //   预览（previewSourceRedaction）只读：给出该文本在**全部已发布版本**
@@ -42,6 +52,18 @@ function normalizeSourceText(source) {
   return text;
 }
 
+// 首尾空白等同的命中判定：库存出处与查询 / 登记文本各自去除首尾空白后相等即命中；
+// 内部空白与其余文字仍须逐字相同（trim 不影响内部字符）。
+function sourceTextEquals(storedSource, normalizedText) {
+  return typeof storedSource === 'string' && storedSource.trim() === normalizedText;
+}
+
+// 公开读出层判定：source 命中任一已登记文本（首尾空白等同）即为被遮盖。
+// redactedSet 中的登记文本均已按 trim 规整（见 redactedSourceSet）。
+function isRedactedSource(source, redactedSet) {
+  return typeof source === 'string' && redactedSet.has(source.trim());
+}
+
 function isRedacted(sourceText) {
   return getDb()
     .prepare('SELECT 1 FROM source_redactions WHERE source_text = ?')
@@ -49,9 +71,10 @@ function isRedacted(sourceText) {
 }
 
 // 全部已登记遮盖文本集合（读出层动态遮盖用，数量级为出处条数）。
+// 登记时已经 normalizeSourceText 去首尾空白；这里再 trim 一次仅为防御历史 / 手工数据。
 function redactedSourceSet() {
   return new Set(
-    getDb().prepare('SELECT source_text AS t FROM source_redactions').all().map((r) => r.t)
+    getDb().prepare('SELECT source_text AS t FROM source_redactions').all().map((r) => r.t.trim())
   );
 }
 
@@ -62,16 +85,17 @@ function applyRedactionToVersion(version, redactedSet = redactedSourceSet()) {
     ...version,
     events: version.events.map((ev) => ({
       ...ev,
-      source: redactedSet.has(ev.source) ? REDACTED_SOURCE : ev.source,
+      source: isRedactedSource(ev.source, redactedSet) ? REDACTED_SOURCE : ev.source,
     })),
     relations: version.relations.map((rel) => ({
       ...rel,
-      source: redactedSet.has(rel.source) ? REDACTED_SOURCE : rel.source,
+      source: isRedactedSource(rel.source, redactedSet) ? REDACTED_SOURCE : rel.source,
     })),
   };
 }
 
-// 扫描单个版本快照中的命中位置（精确相等），只读。
+// 扫描单个版本快照中的命中位置（首尾空白等同，其余逐字精确），只读。
+// 库存出处可能带首尾空白（录入端保留原文），故取出后在 JS 侧按统一规则过滤。
 function hitsInVersion(versionNo, sourceText) {
   const db = getDb();
   const versionIdRow = db.prepare('SELECT id FROM versions WHERE version_no = ?').get(versionNo);
@@ -80,17 +104,26 @@ function hitsInVersion(versionNo, sourceText) {
 
   const eventHits = db
     .prepare(
-      `SELECT sort_order AS sortOrder, event_id AS eventId, title
-         FROM version_events WHERE version_id = ? AND source = ? ORDER BY sort_order`
+      `SELECT sort_order AS sortOrder, event_id AS eventId, title, source
+         FROM version_events WHERE version_id = ? ORDER BY sort_order`
     )
-    .all(versionId, sourceText);
+    .all(versionId)
+    .filter((r) => sourceTextEquals(r.source, sourceText))
+    .map(({ sortOrder, eventId, title }) => ({ sortOrder, eventId, title }));
   const relationHits = db
     .prepare(
       `SELECT sort_order AS sortOrder, relation_id AS relationId,
-              earlier_event_id AS earlierEventId, later_event_id AS laterEventId
-         FROM version_relations WHERE version_id = ? AND source = ? ORDER BY sort_order`
+              earlier_event_id AS earlierEventId, later_event_id AS laterEventId, source
+         FROM version_relations WHERE version_id = ? ORDER BY sort_order`
     )
-    .all(versionId, sourceText);
+    .all(versionId)
+    .filter((r) => sourceTextEquals(r.source, sourceText))
+    .map(({ sortOrder, relationId, earlierEventId, laterEventId }) => ({
+      sortOrder,
+      relationId,
+      earlierEventId,
+      laterEventId,
+    }));
 
   return {
     versionNo,
@@ -104,21 +137,29 @@ function hitsInVersion(versionNo, sourceText) {
 
 // 草稿区（未发布）中的命中：仅供编辑参考——确认后这些内容发布时会自动遮盖。
 // 预览主体仍只统计「全部已发布版本」（需求：在已发布版本的事件主张与先于关系中命中）。
+// 与已发布版本同一命中规则：首尾空白等同，其余逐字精确。
 function draftHits(sourceText) {
   const db = getDb();
   const claimHits = db
     .prepare(
-      `SELECT c.id AS claimId, c.event_id AS eventId, e.title
-         FROM claims c JOIN events e ON e.id = c.event_id
-        WHERE c.source = ? ORDER BY c.id`
+      `SELECT c.id AS claimId, c.event_id AS eventId, e.title, c.source
+         FROM claims c JOIN events e ON e.id = c.event_id ORDER BY c.id`
     )
-    .all(sourceText);
+    .all()
+    .filter((r) => sourceTextEquals(r.source, sourceText))
+    .map(({ claimId, eventId, title }) => ({ claimId, eventId, title }));
   const relationHits = db
     .prepare(
-      `SELECT id AS relationId, earlier_id AS earlierEventId, later_id AS laterEventId
-         FROM relations WHERE source = ? ORDER BY id`
+      `SELECT id AS relationId, earlier_id AS earlierEventId, later_id AS laterEventId, source
+         FROM relations ORDER BY id`
     )
-    .all(sourceText);
+    .all()
+    .filter((r) => sourceTextEquals(r.source, sourceText))
+    .map(({ relationId, earlierEventId, laterEventId }) => ({
+      relationId,
+      earlierEventId,
+      laterEventId,
+    }));
   return {
     claimHitCount: claimHits.length,
     relationHitCount: relationHits.length,
@@ -228,5 +269,7 @@ module.exports = {
   confirmSourceRedaction,
   applyRedactionToVersion,
   redactedSourceSet,
+  isRedactedSource,
+  sourceTextEquals,
   listRedactions,
 };

@@ -19,7 +19,7 @@
 
 const { getDb } = require('./db');
 const { getVersionDetail } = require('./publish');
-const { redactedSourceSet, REDACTED_SOURCE } = require('./redact');
+const { redactedSourceSet, isRedactedSource, REDACTED_SOURCE } = require('./redact');
 
 const MAX_TITLE_LEN = 200;
 
@@ -303,9 +303,10 @@ function getRouteDetail(routeNo) {
 }
 
 // 公开读出层：命中遮盖登记的出处统一显示「出处已遮盖」，其余字段不动。
+// 命中规则与版本快照一致：首尾空白等同，其余逐字精确（见 redact.js）。
 function applyRedactionToRoute(route, redactedSet = redactedSourceSet()) {
   if (!route || redactedSet.size === 0) return route;
-  const mask = (s) => (redactedSet.has(s) ? REDACTED_SOURCE : s);
+  const mask = (s) => (isRedactedSource(s, redactedSet) ? REDACTED_SOURCE : s);
   return {
     ...route,
     events: route.events.map((ev) => ({ ...ev, source: mask(ev.source) })),

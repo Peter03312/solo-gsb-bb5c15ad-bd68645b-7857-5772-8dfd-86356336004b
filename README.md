@@ -213,14 +213,20 @@ curl -s -X DELETE -H "X-Editor-Token: $TOKEN" "$BASE/api/editor/schedules/1"  # 
 
 ### 按出处原文撤回公开展示（出处遮盖，预览 → 确认）
 
-受访人或档案方要求撤回某条出处的公开展示时，编辑者可按**出处原文**精确遮盖。适用于已发布快照中**事件主张的出处**与**「先于」关系的出处**：
+受访人或档案方要求撤回某条出处的公开展示时，编辑者可按**出处原文**精确遮盖。适用于已发布快照中**事件主张的出处**与**「先于」关系的出处**。
 
-1. **预览（只读）**：在编辑台「按出处原文撤回公开展示」卡片粘贴**非空的精确出处文本**（须与快照中的出处逐字相同；首尾空白会被去除，部分包含不命中），或调用 `POST /api/editor/redaction-preview`。返回该文本在**全部已发布版本**中命中的位置与数量（按版本列出事件主张命中与关系命中）、当前最新版本号 `currentVersionNo`；另附草稿区同文本条数供参考。预览不写任何数据。
-2. **确认遮盖**：`POST /api/editor/redaction`，必须提交原文与预览时的**最新版本号** `currentVersionNo`。系统只在 `source_redactions` 表**追加登记该文本**：
+**命中规则：首尾空白等同，其余逐字精确。** 手工录入、整理包导入或并行会话保存的出处都可能带首尾空白（录入端一律保留原文入库），因此命中比较时把**库存出处**与**提交的遮盖文本**各自去除首尾空白后再判等：
 
-   - **不改写任何历史快照或草稿**（版本快照表里的 `source` 原文原样保留）；
-   - 访客读取**最新年表**或**指定历史版本**时，命中位置的 `source` 一律显示为统一的 **「出处已遮盖」**，其余字段（标题、日期、区间、求解日期、考异等）与版本号不变；
-   - **以后发布含同一文本的新版本也自动遮盖**（读出时动态比对登记文本，无需逐版处理）；
+- 库存「` 李宝山口述 `」（带首尾空格 / 换行 / 制表符）与提交「`李宝山口述`」⇒ **命中**；
+- 内部空白与其余文字仍须逐字相同：「`李宝山 口述`」（内部多空格）≠「`李宝山口述`」，部分包含同样不命中；
+- 该规则统一适用于：预览命中统计（全部已发布版本的事件主张、「先于」关系，以及草稿区参考计数）、遮盖登记去重（同一文本的首尾空白变体重复确认幂等）、以及全部公开读出层（最新年表、任一历史版本、专题路线、勘误附记出处、以后发布的新版本）。
+
+1. **预览（只读）**：在编辑台「按出处原文撤回公开展示」卡片粘贴**非空的精确出处文本**（提交文本首尾空白会被去除，再按上述规则命中；部分包含不命中），或调用 `POST /api/editor/redaction-preview`。返回该文本在**全部已发布版本**中命中的位置与数量（按版本列出事件主张命中与关系命中）、当前最新版本号 `currentVersionNo`；另附草稿区同规则命中条数供参考。预览不写任何数据。
+2. **确认遮盖**：`POST /api/editor/redaction`，必须提交原文与预览时的**最新版本号** `currentVersionNo`。系统只在 `source_redactions` 表**追加登记该文本**（登记时去除首尾空白）：
+
+   - **不改写任何历史快照或草稿**（版本快照表里的 `source` 原文原样保留，含可能存在的首尾空白）；
+   - 访客读取**最新年表**、**指定历史版本**或**专题路线**时，命中位置（含勘误附记的出处）的 `source` 一律显示为统一的 **「出处已遮盖」**，其余字段（标题、日期、区间、求解日期、考异等）与版本号不变；
+   - **以后发布含同一文本（含其首尾空白变体）的新版本也自动遮盖**（读出时动态比对登记文本，无需逐版处理）；
    - 持编辑口令查看版本详情（`GET /api/editor/versions/:no/raw`、编辑台「查看该版快照原文」）**仍显示原文**；**从历史版本恢复草稿也使用原文**；
    - 遮盖登记不推进草稿修订号，与恢复 / 导入的并发控制互不影响。
 3. **冲突与幂等**：预览后若有人发布了新版本（最新版本号变化），确认返回 **409** `VERSION_CONFLICT` 且**不落库**，需重新预览再确认；空 / 纯空白文本返回 **400**；同一文本**重复确认**返回 **200** 且 `alreadyRedacted: true`（已遮盖状态与当前命中数量，不重复登记）。
@@ -544,7 +550,7 @@ curl -s -X POST "$BASE/api/editor/sessions/$SID2/commit" -H "X-Editor-Token: $TO
 - 备份：停止写入后复制该 `.db` 文件即可（或使用 SQLite 的 `.backup` 命令）。
 - 历史版本表 `versions / version_events / version_relations` 只追加、不更新不删除，保证不可变。
 - 导入批次表 `import_batches` 记录每次成功导入的批次标识与内容指纹，用于防止同一批次重复导入。
-- 出处遮盖表 `source_redactions` 同样只追加：只存被遮盖的精确出处文本，**不回写快照或草稿**；删除该表对应行即恢复公开显示。
+- 出处遮盖表 `source_redactions` 同样只追加：只存被遮盖的精确出处文本（登记时去除首尾空白），**不回写快照或草稿**；命中按「首尾空白等同，其余逐字精确」在读出层动态判定，删除该表对应行即恢复公开显示。
 - 版本撤回表 `version_retractions` 只追加审计记录：版本号（UNIQUE，每版至多一条）、非空原因、编辑者、时间；**不回写快照或草稿**，访客读出层据此隐藏撤回版，编辑者接口不受影响。
 - 勘误附记表 `errata` 只追加：目标版号、对象类型（event / relation）、该版快照对象编号、勘误说明、出处、编辑者、被替代的前一条附记号（`replaces_errata_id`，NULL 为该目标首条）。**不回写快照或草稿**；同一目标的生效附记即链尾（id 最大者），替代时事务内核对所见附记号，冲突不落库；旧附记全部保留供追溯。公开读出时附记出处按 `source_redactions` 精确文本动态遮盖；目标版撤回后访客不再看到该版及其附记。
 - 预约发布表 `publish_schedules` 在建立时冻结完整待发布内容（事件 / 所选主张 / 关系 / 求解日期）与基准版本号；`status` 在待执行（`pending`）、已发布（`published`）、冲突（`conflict`）、已取消（`cancelled`）间单向流转。到期写版本与翻状态在同一事务内完成，重启只补跑 `pending` 行；**冻结基准版已被撤回的预约到期转冲突，不生成新版本**。
@@ -565,7 +571,9 @@ src/
   restore.js    恢复草稿：只读预览 + 原子替换事务（修订号/版本号冲突检查、按快照重建）；
                 事务内登记 draft_restores（草稿代 +1），供并行编辑会话识别对象身份更替
   bundle.js     采访整理包导入：整包校验 + 内容指纹 + 只读预览 + 事务追加（批次防重/修订号冲突检查）
-  redact.js     出处遮盖：精确出处文本的只读命中预览 + 只追加登记（版本号冲突检查）；公开读出层动态替换为「出处已遮盖」
+  redact.js     出处遮盖：精确出处文本的只读命中预览 + 只追加登记（版本号冲突检查）；
+                命中规则「首尾空白等同，其余逐字精确」统一用于预览统计、登记去重与公开读出层
+                （最新年表 / 历史版本 / 专题路线 / 勘误附记 / 以后发布的新版本动态替换为「出处已遮盖」）
   retract.js    版本撤回：按版本号 + 非空原因只追加审计记录（快照/版本号不变，重复撤回幂等返回首次记录）；公开读出层隐藏撤回版（最新年表指向最大未撤回版，撤回版详情与引用它的路线按不存在处理）
   errata.js     勘误附记：对指定已发布版本中的事件 / 「先于」关系登记附记（只追加，不改快照/草稿）；
                 替代须提交所见附记号（事务内核对，两人同时替代仅一个成功，冲突方取得当前附记且不落库）；
@@ -613,11 +621,11 @@ test/           node:test 单元与端到端测试（含成环、无解、409 �
 - `POST /api/editor/import` — 确认导入；体含 `bundle`（原包）、`fingerprint`、`draftRevisionNo`（后两者取预览返回值）
   - 201：`{batchId, revisionNo, counts, idMap:{events:[{key,eventId,claimIds}], relations:[{earlierKey,laterKey,relationId}]}}`（一个事务追加整包）
   - 409：`{code:"BUNDLE_CONTENT_MISMATCH"|"DRAFT_REVISION_CONFLICT"|"BATCH_ALREADY_IMPORTED", ...}`（内容被替换 / 草稿已变化 / 批次已导入，均不写入）；参数非法 400
-- `POST /api/editor/redaction-preview` — 出处遮盖只读预览；体含非空 `source`（精确出处原文，首尾空白去除），返回全部已发布版本的命中位置/数量、`currentVersionNo` 与草稿区参考计数
+- `POST /api/editor/redaction-preview` — 出处遮盖只读预览；体含非空 `source`（精确出处原文；首尾空白等同——库存出处带首尾空白也命中，内部空白与其余文字逐字精确），返回全部已发布版本的命中位置/数量、`currentVersionNo` 与草稿区参考计数
   - 200：`{source, alreadyRedacted, currentVersionNo, versionCount, totalEventHitCount, totalRelationHitCount, totalHitCount, versions:[{versionNo,eventHitCount,relationHitCount,eventHits:[{eventId,title,sortOrder}],relationHits:[{relationId,earlierEventId,laterEventId,sortOrder}]}], draft:{claimHitCount,relationHitCount,...}}`
   - 400：空 / 纯空白 / 非字符串文本
 - `POST /api/editor/redaction` — 确认遮盖（只追加登记，不改写快照或草稿）；体含 `source`、`currentVersionNo`（取预览返回值）、可选 `editor`
-  - 200：`{alreadyRedacted:false, redactedLabel:"出处已遮盖", redactedAt, ...命中统计}`；重复确认 200 且 `alreadyRedacted:true`（不重复登记）
+  - 200：`{alreadyRedacted:false, redactedLabel:"出处已遮盖", redactedAt, ...命中统计}`；重复确认 200 且 `alreadyRedacted:true`（同一文本的首尾空白变体同样幂等，不重复登记）
   - 409：`{code:"VERSION_CONFLICT", currentVersionNo, expectedVersionNo, ...}`（预览后发布了新版本，不落库）；空文本或版本号非法 400
 - `GET  /api/editor/redactions` — 已登记遮盖清单（编辑者视角，含出处原文与登记时间）
 - `POST /api/editor/schedules` — 建立预约发布；体含 `selection:[{eventId,claimId}]`、`scheduledAt`（未来 UTC，如 `2026-10-02T12:34:00Z`）、`baseVersionNo`、`editor`、`note`

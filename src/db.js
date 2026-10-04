@@ -129,14 +129,16 @@ CREATE TABLE IF NOT EXISTS version_relations (
 CREATE INDEX IF NOT EXISTS idx_vr_version ON version_relations(version_id);
 
 -- ============ 出处遮盖（编辑者按出处原文撤回公开展示） ============
--- 只追加登记「被遮盖的精确出处文本」：确认后不改写任何历史快照或草稿，
--- 公开接口读出时动态把命中位置的 source 显示为统一的「出处已遮盖」。
+-- 只追加登记「被遮盖的精确出处文本」（登记时去除首尾空白）：确认后不改写任何
+-- 历史快照或草稿，公开接口读出时动态把命中位置的 source 显示为统一的「出处已遮盖」。
+-- 命中规则：首尾空白等同（库存出处可能带首尾空白，比较时各自去除后再判等），
+-- 内部空白与其余文字仍须逐字相同。
 -- 持编辑口令的版本详情、从版本恢复草稿仍使用快照原文；
--- 以后新发布的快照只要 source 精确等于登记文本，公开读出同样自动遮盖。
+-- 以后新发布的快照只要 source 命中登记文本（同一规则），公开读出同样自动遮盖。
 -- 同一文本只登记一次（重复确认幂等返回已遮盖状态）；该表与草稿修订号无关。
 CREATE TABLE IF NOT EXISTS source_redactions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  source_text TEXT NOT NULL UNIQUE,             -- 精确出处原文（精确相等才命中）
+  source_text TEXT NOT NULL UNIQUE,             -- 精确出处原文（首尾空白等同，其余逐字精确才命中）
   editor      TEXT NOT NULL DEFAULT '',
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
