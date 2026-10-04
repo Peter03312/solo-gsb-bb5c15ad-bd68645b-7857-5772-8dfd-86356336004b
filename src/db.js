@@ -129,14 +129,18 @@ CREATE TABLE IF NOT EXISTS version_relations (
 CREATE INDEX IF NOT EXISTS idx_vr_version ON version_relations(version_id);
 
 -- ============ 出处遮盖（编辑者按出处原文撤回公开展示） ============
--- 只追加登记「被遮盖的精确出处文本」：确认后不改写任何历史快照或草稿，
+-- 只追加登记「被遮盖出处的规范文本」：确认后不改写任何历史快照或草稿，
 -- 公开接口读出时动态把命中位置的 source 显示为统一的「出处已遮盖」。
+-- 登记文本为编辑者提交文本 trim（去首尾全部空白字符）后的规范文本；
+-- 命中判定对两侧各自 trim 后做严格相等比较：仅首尾空白不同的写法
+-- （手工录入 / 整理包导入 / 并行会话提交的出处都可能带首尾空白）同样命中，
+-- 内部空白与其他文字仍逐字区分（部分包含不命中）。
 -- 持编辑口令的版本详情、从版本恢复草稿仍使用快照原文；
--- 以后新发布的快照只要 source 精确等于登记文本，公开读出同样自动遮盖。
--- 同一文本只登记一次（重复确认幂等返回已遮盖状态）；该表与草稿修订号无关。
+-- 以后新发布的快照只要 source trim 后等于登记文本，公开读出同样自动遮盖。
+-- 同一规范文本只登记一次（重复确认幂等返回已遮盖状态）；该表与草稿修订号无关。
 CREATE TABLE IF NOT EXISTS source_redactions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  source_text TEXT NOT NULL UNIQUE,             -- 精确出处原文（精确相等才命中）
+  source_text TEXT NOT NULL UNIQUE,             -- 规范出处文本（提交文本 trim 后；两侧 trim 相等才命中）
   editor      TEXT NOT NULL DEFAULT '',
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -226,7 +230,8 @@ CREATE INDEX IF NOT EXISTS idx_route_segments_route ON route_segments(route_id);
 -- 同一目标（版本号 + 对象类型 + 对象 id）可多次登记：后一条以 replaces_errata_id 替代
 -- 前一条生效附记——登记时须提交所见附记号，事务内核对，两人同时替代仅一个成功，
 -- 冲突方不落库；旧附记全部保留供追溯，同一目标只展示最新生效附记。
--- 公开读出时附记出处按 source_redactions 的精确文本遮盖规则显示；
+-- 公开读出时附记出处按 source_redactions 的遮盖规则显示
+-- （两侧各自 trim 去首尾空白后严格相等；内部空白与其他文字逐字区分）；
 -- 目标版被撤回后访客不再看到该版及其附记，编辑者仍可查原文与替代链。
 CREATE TABLE IF NOT EXISTS errata (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,   -- 附记号

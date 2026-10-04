@@ -11,14 +11,15 @@
 //     不一致即 409 ERRATA_CONFLICT 并返回当前生效附记，**不落库**——两名编辑者同时
 //     替代时仅先提交者成功；旧附记全部保留（replaces_errata_id 形成替代链）供追溯；
 //   - 访客读取目标版或最新年表时可见生效附记，附记出处沿用 source_redactions 的
-//     精确文本遮盖规则（命中显示「出处已遮盖」，读出时动态比对）；
+//     出处遮盖规则（库存出处与登记文本各自 trim 后严格相等即命中，首尾空白折叠、
+//     内部空白仍逐字区分；命中显示「出处已遮盖」，读出时动态比对）；
 //   - 目标版已撤回时拒绝登记；撤回后访客不再看到该版及其附记（随版本读出层隐藏），
 //     编辑者持口令仍可查原文与完整替代链。
 //
 // 抛 { status, ...body } 表示 HTTP 错误。
 
 const { getDb } = require('./db');
-const { redactedSourceSet, REDACTED_SOURCE } = require('./redact');
+const { redactedSourceSet, sourceMatchesRedaction, REDACTED_SOURCE } = require('./redact');
 
 const MAX_NOTE_LEN = 2000; // 与考异备注长度上限一致
 const MAX_SOURCE_LEN = 1000; // 与出处录入长度上限一致
@@ -272,11 +273,12 @@ function effectiveErrataForVersion(versionNo, versionDetail) {
 }
 
 // 公开读出层：附记出处命中遮盖登记的统一显示「出处已遮盖」，其余字段不动。
+// 命中规则与版本 / 路线读出一致：库存出处（可能带首尾空白）trim 后与登记文本严格相等。
 function applyRedactionToErrata(items, redactedSet = redactedSourceSet()) {
   if (!items || redactedSet.size === 0) return items;
   return items.map((it) => ({
     ...it,
-    source: redactedSet.has(it.source) ? REDACTED_SOURCE : it.source,
+    source: sourceMatchesRedaction(it.source, redactedSet) ? REDACTED_SOURCE : it.source,
   }));
 }
 

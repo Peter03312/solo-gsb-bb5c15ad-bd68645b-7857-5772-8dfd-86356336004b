@@ -632,11 +632,18 @@ function showRedactMsg(kind, html) {
 }
 
 function redactHitsHtml(data) {
+  // 命中处库存原文若与规范文本不同（首尾空白变体），用单独一行标出来
+  const variantNote = (stored) =>
+    stored && stored !== data.source
+      ? ` <span class="muted">库存原文 <code>${esc(JSON.stringify(stored))}</code>（仅首尾空白不同，同样命中）</span>`
+      : '';
   const perVersion = data.versions.length
     ? data.versions.map((v) => {
-        const evs = v.eventHits.map((h) => `<li>事件「${esc(h.title)}」（事件主张，eventId ${h.eventId}）</li>`).join('');
+        const evs = v.eventHits
+          .map((h) => `<li>事件「${esc(h.title)}」（事件主张，eventId ${h.eventId}）${variantNote(h.source)}</li>`)
+          .join('');
         const rels = v.relationHits
-          .map((h) => `<li>先于关系 ${h.earlierEventId} → ${h.laterEventId}（relationId ${h.relationId}）</li>`)
+          .map((h) => `<li>先于关系 ${h.earlierEventId} → ${h.laterEventId}（relationId ${h.relationId}）${variantNote(h.source)}</li>`)
           .join('');
         return `
           <div class="rel-line">
@@ -650,13 +657,14 @@ function redactHitsHtml(data) {
 
   const d = data.draft;
   const draftHtml = d
-    ? `<p class="muted">另：当前草稿中有 ${d.claimHitCount} 条未发布主张、${d.relationHitCount} 条未发布关系使用同一文本；
+    ? `<p class="muted">另：当前草稿中有 ${d.claimHitCount} 条未发布主张、${d.relationHitCount} 条未发布关系的出处折叠首尾空白后与之一致；
        它们不在本次公开命中范围内，但<b>以后发布时会自动遮盖</b>（草稿与恢复草稿始终保留原文）。</p>`
     : '';
 
   return `
     ${data.alreadyRedacted ? '<div class="alert warn">该出处文本此前已确认遮盖，重复确认将直接返回已遮盖状态（不重复落库）。</div>' : ''}
-    <p>出处原文：<code>${esc(data.source)}</code></p>
+    <p>规范出处（折叠首尾空白后）：<code>${esc(data.source)}</code></p>
+    <p class="muted">命中规则：仅首尾空白不同的写法互相命中；内部空白与其他文字逐字区分，部分包含不命中。</p>
     <p>
       <span class="badge prec">已发布版本 ${data.versionCount} 个</span>
       <span class="badge prec">事件主张命中 ${data.totalEventHitCount} 处</span>
@@ -666,14 +674,14 @@ function redactHitsHtml(data) {
     ${draftHtml}
     <div style="max-height:240px;overflow:auto">${perVersion}</div>
     <p class="muted" style="margin-top:10px">预览基准：当前最新版本号 <b>${data.currentVersionNo}</b>。
-      确认后不改写历史快照或草稿；访客读最新年表或任一历史版本时，命中处出处统一显示<b>「出处已遮盖」</b>，
+      确认后不改写历史快照或草稿；访客读最新年表、任一历史版本、专题路线与勘误附记时，命中处出处统一显示<b>「出处已遮盖」</b>，
       其余字段与版本号不变。预览后若已发布新版本，确认将报冲突且不落库。</p>
     <div id="redactDialogMsg"></div>`;
 }
 
 async function previewRedaction() {
   const source = $('#redactSource').value;
-  if (!source.trim()) { showRedactMsg('error', '出处原文不能为空，请输入要撤回的精确出处文本。'); return; }
+  if (!source.trim()) { showRedactMsg('error', '出处原文不能为空，请输入要撤回公开展示的出处文本（首尾空白会自动折叠）。'); return; }
   try {
     const data = await api('POST', '/api/editor/redaction-preview', { source });
     redactPreview = data;
